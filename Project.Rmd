@@ -1,0 +1,839 @@
+---
+title: "Agricultural CO2 emissions and temperature change"
+author: "Hannes Guth"
+date: "2024-10-17"
+output:
+  html_document:
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# {.tabset}
+
+## Motivation
+Agriculture and food production make up about **11% of global CO2** emission.\
+\
+It needs scrutiny to understand this block better and therefore the following questions shall be answered in this work:\
+1. What are the main area inside agro-food industry that drive CO2 emissions? \
+2. Which countries contribute the most to these emissions? \
+3. How did emissions and temperatures evolve over time? \
+4. How are emissions and temperatures probably evolving during the next years? \
+
+
+## Data preparation and exploration {.tabset}
+
+
+### Features explanation
+#### **Features**
+**Savanna fires**: Emissions from fires in savanna ecosystems.\
+**Forest fires**: Emissions from fires in forested areas.\
+**Crop Residues**: Emissions from burning or decomposing leftover plant material after crop harvesting.\
+**Rice Cultivation**: Emissions from methane released during rice cultivation.\
+**Drained organic soils (CO2)**: Emissions from carbon dioxide released when draining organic soils.\
+**Pesticides Manufacturing**: Emissions from the production of pesticides.\
+**Food Transport**: Emissions from transporting food products.\
+**Forestland**: Land covered by forests.\
+**Net Forest conversion**: Change in forest area due to deforestation and afforestation.\
+**Food Household Consumption**: Emissions from food consumption at the household level.\
+**Food Retail**: Emissions from the operation of retail establishments selling food.\
+**On-farm Electricity Use**: Electricity consumption on farms.\
+**Food Packaging**: Emissions from the production and disposal of food packaging materials.\
+**Agrifood Systems Waste Disposal**: Emissions from waste disposal in the agrifood system.\
+**Food Processing**: Emissions from processing food products.\
+**Fertilizers Manufacturing**: Emissions from the production of fertilizers.\
+**IPPU**: Emissions from industrial processes and product use.\
+**Manure applied to Soils**: Emissions from applying animal manure to agricultural soils.\
+**Manure left on Pasture**: Emissions from animal manure on pasture or grazing land.\
+**Manure Management**: Emissions from managing and treating animal manure.\
+**Fires in organic soils**: Emissions from fires in organic soils.\
+**Fires in humid tropical forests**: Emissions from fires in humid tropical forests.\
+**On-farm energy use**: Energy consumption on farms.\
+**Rural population**: Number of people living in rural areas.\
+**Urban population**: Number of people living in urban areas.\
+**Total Population - Male**: Total number of male individuals in the population.\
+**Total Population - Female**: Total number of female individuals in the population.\
+**total_emission**: Total greenhouse gas emissions from various sources.\
+**Average Temperature °C**: The average increasing of temperature (by year) in degrees Celsius,\
+
+### Preparation and exploration
+
+```{r, message=FALSE, warning=FALSE, class.source = "fold-show"}
+library(data.table)
+library(naniar)
+library(WDI)
+library(dplyr)
+library(ggplot2)
+library(geomtextpath)
+library(caTools)
+library(gbm)
+library(rpart)
+library(ipred) 
+library(stats)
+library(caret)
+library(forecast)
+library(relaimpo)
+library(tidyr)
+library(treemapify)
+library(corrplot)
+library(fabletools)
+library(DT)
+```
+
+```{r, message=FALSE, warning=FALSE}
+# Set working directory
+setwd(dirname(rstudioapi::getSourceEditorContext()$path))
+
+# Reading the data
+cotwo = fread(paste0(getwd(), "/Agrofood_co2_emission.csv"))
+addit = WDI(indicator = "NY.GDP.MKTP.CD", start = 1990, end = 2020, extra = TRUE)
+```
+
+```{r, message=FALSE, warning=FALSE, class.source = "fold-show"}
+# Change feature names for merging
+colnames(addit)[colnames(addit) == "year"] = "Year"
+colnames(addit)[colnames(addit) == "country"] = "Country"
+colnames(addit)[colnames(addit) == "NY.GDP.MKTP.CD"] = "GDP"
+cotwo = cotwo %>% rename(Country = Area,
+                         temp_change = `Average Temperature °C`,
+                         savanna_fires = `Savanna fires`,
+                         forest_fires = `Forest fires`,
+                         crop_residues = `Crop Residues`,
+                         rice_cultiv = `Rice Cultivation`,
+                         drained_organ_soil = `Drained organic soils (CO2)`,
+                         pesticides_man = `Pesticides Manufacturing`,
+                         food_transport = `Food Transport`,
+                         net_forest_conversion = `Net Forest conversion`,
+                         food_household_cons = `Food Household Consumption`,
+                         food_retail = `Food Retail`,
+                         onfarm_el_use = `On-farm Electricity Use`,
+                         food_packaging = `Food Packaging`,
+                         agrifood_sys_waste_disp = `Agrifood Systems Waste Disposal`,
+                         food_processing = `Food Processing`,
+                         fertil_manuf = `Fertilizers Manufacturing`,
+                         manure_applied_soils = `Manure applied to Soils`,
+                         manure_left_pasture = `Manure left on Pasture`,
+                         manure_management = `Manure Management`,
+                         fires_org_soils = `Fires in organic soils`,
+                         fires_hum_trop = `Fires in humid tropical forests`,
+                         of_en_use = `On-farm energy use`,
+                         rural_population = `Rural population`,
+                         urban_population = `Urban population`,
+                         total_pop_M = `Total Population - Male`,
+                         total_pop_F = `Total Population - Female`)
+cotwo$Country = replace(cotwo$Country, cotwo$Country == "United Kingdom of Great Britain and Northern Ireland", "United Kingdom")
+cotwo$Country = replace(cotwo$Country, cotwo$Country == "United Republic of Tanzania", "Tanzania")
+cotwo$Country = replace(cotwo$Country, cotwo$Country == "United States of America", "United States")
+cotwo$Country = replace(cotwo$Country, cotwo$Country == "United States Virgin Islands", "Virgin Islands (U.S.)")
+cotwo$Country = replace(cotwo$Country, cotwo$Country == "Bolivia (Plurinational State of)", "Bolivia")
+cotwo$Country = replace(cotwo$Country, cotwo$Country == "Venezuela (Bolivarian Republic of)", "Venezuela")
+cotwo$Country = replace(cotwo$Country, cotwo$Country == "Iran (Islamic Republic of)", "Iran")
+cotwo$Country = replace(cotwo$Country, cotwo$Country == "Republic of Korea", "South Korea")
+cotwo$Country = replace(cotwo$Country, cotwo$Country == "Democratic People's Republic of Korea", "North Korea")
+cotwo$Country = replace(cotwo$Country, cotwo$Country == "United Kingdom", "UK")
+addit$Country = replace(addit$Country, addit$Country == "Venezuela, RB", "Venezuela")
+addit$Country = replace(addit$Country, addit$Country == "Congo, Dem. Rep.", "Congo")
+addit$Country = replace(addit$Country, addit$Country == "Egypt, Arab Rep.", "Egypt")
+addit$Country = replace(addit$Country, addit$Country == "Iran, Islamic Rep.", "Iran")
+addit$Country = replace(addit$Country, addit$Country == "Korea, Rep.", "South Korea")
+addit$Country = replace(addit$Country, addit$Country == "United Kingdom", "UK")
+
+cotwo = merge(cotwo, addit, by = c("Country", "Year")) # merge the emission dataset and the dataset with GDP and country codes
+datatable(cotwo)
+```
+
+
+```{r, message=FALSE, warning=FALSE, class.source = "fold-show"}
+# Overview about the data
+summary(cotwo)
+cotwo = cotwo[, -c("iso2c", "status", "capital", "lending", "lastupdated")] # remove unneeded columns
+# Change from character to numeric
+cotwo$longitude = as.numeric(cotwo$longitude)
+cotwo$latitude = as.numeric(cotwo$latitude)
+```
+
+**Data consistency check**
+```{r, message=FALSE, warning=FALSE, class.source = "fold-show"}
+# Check for consistency in the data
+(rowSums(cotwo[, 3:25], na.rm = TRUE) == cotwo$total_emission)[1:10] # get first impression
+check = data.table("sum" = rowSums(cotwo[, 3:25], na.rm = TRUE),
+                   "actual" = cotwo$total_emission) # get deeper insights
+sum(round(rowSums(cotwo[, 3:25], na.rm = TRUE), 1) == round(cotwo$total_emission, 1)) / length(round(rowSums(cotwo[, 3:25], na.rm = TRUE), 1) == round(cotwo$total_emission, 1)) # proof that everything fits
+rm(check)
+```
+\
+The single features values sum up to the total value.
+
+**Missing values**
+```{r, message=FALSE, warning=FALSE}
+# Missing values
+gg_miss_var(cotwo)
+```
+
+There are missing values which will not be removed per sé, but dealt with in accordance with the necessities in the specific application.
+
+**Feature engineering**
+```{r, message=FALSE, warning=FALSE, class.source = "fold-show"}
+# Feature engineering
+cotwo = merge(x = cotwo, y = cotwo[, mean(temp_change), by = Year], by = "Year")
+setorder(cotwo, Country, Year)
+colnames(cotwo)[length(cotwo)] = "world_temp_change" # change for every year, worldwide average
+cotwo$gdp_capita = cotwo$GDP / (cotwo$total_pop_M + cotwo$total_pop_F) # GDP/capita
+cotwo$total_pop = cotwo$total_pop_M + cotwo$total_pop_F # total population
+```
+
+
+## Drivers of emissions {.tabset}
+
+### Direct
+The items that are under scrutiny, here, are parts of complete emissions and sum up to the total emission as shown in the data preparation.\
+
+**What are the main areas that contribute directly to emissions?**
+```{r, message=FALSE, warning=FALSE, class.source = "fold-show"}
+# Main drivers of emissions
+# 1. Direct
+driver_direct = data.table("name" = colnames(cotwo)[3:25],
+                           "sum" = 0) # take the directly contributing features
+for (i in 3:25){
+  driver_direct[i-2,2] = sum(cotwo[,..i], na.rm = TRUE)
+}
+
+driver_direct = driver_direct[sum > 0] # filter out those countries that hav a negative balance
+driver_direct = driver_direct[order(-rank(sum), name)]
+driver_direct$name = factor(driver_direct$name, levels = rev(as.character(driver_direct$name)))
+non_grey_names = levels(driver_direct$name)[15:length(levels(driver_direct$name))]
+```
+
+```{r, message=FALSE, warning=FALSE}
+# Plot the result
+ggplot(driver_direct, aes(x="", y=sum, fill=name)) +
+  geom_bar(width = 1, size = 1, color = "white", stat = "identity") +
+  coord_polar(theta = "y", start=0) +
+  theme(axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        panel.grid  = element_blank(),
+        legend.position = "right") +
+  labs(x = NULL, y = NULL, fill = NULL, 
+       title = "Contributing areas") +
+  guides(fill = guide_legend(reverse = TRUE)) +
+  scale_fill_manual(values = c("cyan2", "cadetblue", "dodgerblue", "darkorchid", "blueviolet", "blue", "#254290", "black", rep("grey", 14)), breaks = non_grey_names) +
+  geom_text(aes(label = c(scales::percent(round(sum / sum(driver_direct$sum),2))[1:8], rep("",14)), x = 1.65),
+            position = position_stack(vjust = 0.5)
+            )
+```
+\
+\
+**Which types of fire and where are especially prominent when it comes to emissions?**
+\
+Fires contribute with 6.7% to agricultural emissions, which is a lot but considering that agricultural emissions themselves make up 11% of overall emissions.
+```{r, message=FALSE, warning=FALSE}
+fire_data = cotwo[, c("Year", "Country", "region", "savanna_fires", "forest_fires", "fires_org_soils", "fires_hum_trop", "temp_change", "world_temp_change")] # take all the fire-relevant feature
+fire_data2 = data.table(fire_data[, -c("temp_change", "world_temp_change", "sum_fire", "Year", "Country")] %>% gather(key = "variable", value = "value", -region)) # re-shape the data
+fire_data2 = fire_data2[, sum(value, na.rm = TRUE), by = c("variable","region")] # aggregate by fire-type (variable) and region
+fire_data2 = fire_data2[complete.cases(fire_data2), ] # remove cases with NAs
+colnames(fire_data2)[3] = "Value"
+```
+
+```{r, message=FALSE, warning=FALSE}
+print(paste("Contribution of fires to agricultural CO2 emissions:", round((sum(fire_data2$Value, na.rm = TRUE)/sum(cotwo$total_emission))*100,2), "%"))
+print(paste("Contribution of fires to overall CO2 emissions:", round((sum(fire_data2$Value,na.rm = TRUE)/sum(cotwo$total_emission))*0.11*100,2), "%"))
+```
+
+```{r, message=FALSE, warning=FALSE}
+ggplot(fire_data2, aes(area = Value, fill = region, label = variable, subgroup = region)) + 
+  geom_treemap(layout = "squarified") + 
+  geom_treemap_text(place = "centre", size = 12) +
+  scale_fill_manual(values = c("South Asia" = "blue",
+                               "Europe & Central Asia" = "red",
+                               "Middle East & North Africa" = "green",
+                               "East Asia & Pacific" = "yellow",
+                               "Sub-Saharan Africa" = "purple",
+                               "Latin America & Caribbean" = "brown",
+                               "North America" = "orange")) +
+  labs(title = "Absolute contribution to CO2 emissions")
+```
+\
+The largest emission caused by fire of any kind in the agriculture can be found in East Asia & Pacific and Sub-Saharan Africa.\
+
+### Indirect
+\
+Those drivers are not parts of the overall sum but relate to the characteristics of a country, like gdp or capita.\
+They will be assessed in several machine learning models to quantify their explanatory power.\
+
+```{r, message=FALSE, warning=FALSE}
+# 2. Indirect
+
+# Preparation of for ML models
+set.seed(1)
+ml_drivers = cotwo[, -c("of_en_use")]
+
+# Feature engineering
+ml_drivers$income = as.factor(ml_drivers$income)
+ml_drivers$region = as.factor(ml_drivers$region)
+ml_drivers$GDP = ml_drivers$GDP / 1000000000 # otherwise the function will give an error
+ml_drivers$total_pop = ml_drivers$total_pop_F + ml_drivers$total_pop_M
+ml_drivers$rural_population = ml_drivers$rural_population / (ml_drivers$urban_population + ml_drivers$rural_population)
+ml_drivers$total_pop_M = ml_drivers$total_pop_M / (ml_drivers$total_pop_M + ml_drivers$total_pop_F)
+ml_drivers = ml_drivers[complete.cases(ml_drivers)]
+ml_drivers = cbind(Id = seq(from = 1, to = nrow(ml_drivers)), ml_drivers)
+
+# Prepare training and test data
+split = sample.split(ml_drivers$Id, SplitRatio = 0.7)
+train = ml_drivers[split, ]
+test = ml_drivers[!split, ]
+
+ml_summary = data.table("true" = test$total_emission,
+                        "lm" = 0,
+                        "gbm" = 0)
+
+M = cor(ml_drivers[complete.cases(ml_drivers), c("Year", "rural_population", "total_pop_M", "GDP", "longitude" , "latitude", "gdp_capita")])
+col = colorRampPalette(c("#BB4444", "#EE9988", "#FFFFFF", "#77AADD", "#4477AA"))
+corrplot(M, method="color", col=col(200),  
+         type="upper", order="hclust", 
+         addCoef.col = "black", # Add coefficient of correlation
+         tl.col="black", tl.srt=45, #Text label color and rotation
+         # Combine with significance
+         sig.level = 0.01, insig = "blank", 
+         # hide correlation coefficient on the principal diagonal
+         diag=FALSE 
+         )
+```
+\
+The correlation matrix looks acceptable. There are surprising or concerning correlations between the predictors. A positive correlation between latitude and GDP per capita can be observed what makes intuitively sense as northern countries tend to be industrialized and developed. In addition, it seems that the higher the percentage of rural population, the lower is the gdp per capita what is also intuitive.
+
+
+#### Linear Model
+```{r, message=FALSE, warning=FALSE}
+# LM
+lm_mod = lm(total_emission ~ Year + rural_population + total_pop_M + GDP + region + income + longitude + latitude + gdp_capita,
+         data = train) # fit the model
+summary(lm_mod)
+ml_summary$lm = predict(lm_mod, test) # make predictions
+
+rel_imp = calc.relimp(lm_mod, type = "lmg", importance = TRUE) # get the relative importance
+lm_summary = data.table("Feature" = rownames(as.data.frame(rel_imp@lmg)),
+                        "Value" = as.numeric(rel_imp@lmg))
+
+ggplot(lm_summary, aes(x = reorder(Feature, -Value), y = Value)) +
+  geom_bar(stat = "identity") +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
+        panel.background = element_rect(fill = "white", colour="white"),
+        axis.line = element_line(colour = "black"))  +
+  labs(title = "Feature importance for lm",
+       x = "Features",
+       y = "Importance")
+```
+\
+The by far most important featur according to the linear model is the GDP. A minor influence has the region. All other features seem to be irrelevant.
+
+#### Boosting
+```{r, message=FALSE, warning=FALSE, fig.show='hide'}
+# Boosting
+gb_mod = gbm(total_emission ~ Year + rural_population + total_pop_M + GDP + region + income + longitude + latitude + gdp_capita,
+          data = train,
+          distribution = "gaussian",
+          n.trees = 1000, shrinkage = 0.01,
+          interaction.depth = 4,
+          bag.fraction = 0.7,
+          n.minobsinnode = 5) # fit the model
+gb_summary = data.table("Feature" = summary(gb_mod)$var,
+                        "Value" = summary(gb_mod)$rel.inf)
+```
+
+```{r, message=FALSE, warning=FALSE}
+ggplot(gb_summary, aes(x = reorder(Feature, -Value), y = Value)) +
+  geom_bar(stat = "identity") +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
+        panel.background = element_rect(fill = "white", colour="white"),
+        axis.line = element_line(colour = "black"))  +
+  labs(title = "Feature importance for boosting",
+       x = "Features",
+       y = "Importance")
+
+ml_summary$gbm = predict(gb_mod, test) # make predictions
+```
+\
+Boosting gives the greatest importance to the GDP as well, as could be observed for the linear model. GDP per capita is also considered very important. All other features do not seem to have a big influence.\
+
+#### Bagging
+
+```{r, message=FALSE, warning=FALSE}
+# Bagging
+ba_mod = bagging( 
+  formula = total_emission ~ Year + rural_population + total_pop_M + GDP + region + income + longitude + latitude + gdp_capita, 
+  data = train, 
+  nbagg = 50,    
+  coob = TRUE, 
+  control = rpart.control(minsplit = 2, cp = 0,
+                          min_depth=2) 
+) # fit the mdoel
+summary(ba_mod)
+ml_summary$ba = predict(ba_mod, test) # make predictions
+ba_summary = varImp(ba_mod)
+
+ggplot(ba_summary, aes(x = reorder(rownames(ba_summary), -Overall), y = Overall)) +
+  geom_bar(stat = "identity") +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
+        panel.background = element_rect(fill = "white", colour="white"),
+        axis.line = element_line(colour = "black")) +
+  labs(title = "Feature importance for bagging",
+       x = "Features",
+       y = "Importance")
+```
+\
+In contrast to the models before, bagging gives nearly the same high importance to 5 features, GDP being one of them, but not the most important feature. Regionality and income seem to unimportant.
+
+#### Summary
+```{r, message=FALSE, warning=FALSE}
+# Get the Mean Absolute Error of all methods
+MAE(ml_summary$true-ml_summary$lm)
+MAE(ml_summary$true-ml_summary$gbm)
+MAE(ml_summary$true-ml_summary$ba)
+```
+\
+Indeed, the bagging model delivers the lowest MAE (Mean Absolute Error) and therefore the features named by this model can be seen important.\
+
+
+## Contributing countries
+
+In this chapter, it shall be assessed, which countries contribute the most to agricultural CO2 emission.
+
+```{r, message=FALSE, warning=FALSE}
+# Treemap
+treemap_data = cotwo[, sum(total_emission), by = Country]
+colnames(treemap_data)[2] = "Sum"
+treemap_data = merge(x = treemap_data, y = cotwo[,c("Country","region","iso3c","total_pop_M","total_pop_F")], by = "Country", all.x = TRUE)
+treemap_data = as.data.frame(treemap_data[!duplicated(Country)])
+treemap_data = treemap_data[complete.cases(treemap_data),]
+treemap_data$emission_per_capita = treemap_data$Sum / (treemap_data$total_pop_M + treemap_data$total_pop_F)
+
+ggplot(treemap_data["Sum" > 0, ], aes(area = Sum, fill = region, label = iso3c, subgroup = region)) + 
+  geom_treemap(layout = "squarified") + 
+  geom_treemap_text(place = "centre", size = 12) +
+  scale_fill_manual(values = c("South Asia" = "blue",
+                               "Europe & Central Asia" = "red",
+                               "Middle East & North Africa" = "green",
+                               "East Asia & Pacific" = "yellow",
+                               "Sub-Saharan Africa" = "purple",
+                               "Latin America & Caribbean" = "brown",
+                               "North America" = "orange")) +
+  labs(title = "Absolute contribution to CO2 emissions")
+```
+\
+East Asia and Pacific together with Latin America and the Caribbean make up more than half of the global emissions, with China being the largest pollutant in absolute numbers.
+\
+
+## Emissions over time
+
+In this chapter, it shall be examined how emission in general in different regions developed over time.
+
+**How did overall emissions develop worldwide?**
+```{r, message=FALSE, warning=FALSE}
+# Which countries contributed most to emissions?
+options(scipen = 999) # avoid scientific notation
+em_overall = cotwo[, sum(total_emission), by = Year] # aggregate total emissions by year (sum)
+colnames(em_overall)[2] = "World"
+em_regions = cotwo[, sum(total_emission), by = c("Year","region")]
+em_regions = em_regions[complete.cases(em_regions),]
+
+# Transform data so that they can be merged
+em_regions = em_regions %>%
+  mutate(region = as.factor(region)) %>%
+  spread(key = region, value = V1)
+
+em_regions = merge(x = em_overall, em_regions, by = "Year")
+
+# Re-transform data
+em_regions = em_regions %>%
+  gather(key = "variable", value = "value", -Year)
+
+em_regions = em_regions[seq(0, nrow(em_regions), 2),] # delete every second row
+colnames(em_regions)[2] = "Region"
+
+ggplot(em_regions, aes(x = Year, y = value)) +
+  geom_point(aes(color = Region)) +
+  geom_line(aes(color = Region)) +
+  scale_color_manual(values = c("World" = "black",
+                                "South Asia" = "blue",
+                                "Europe & Central Asia" = "red",
+                                "Middle East & North Africa" = "green",
+                                "East Asia & Pacific" = "yellow",
+                                "Sub-Saharan Africa" = "purple",
+                                "Latin America & Caribbean" = "brown",
+                                "North America" = "orange")) +
+  labs(title = "Emission development over time",
+       x = "Year",
+       y = "Emission in kt") +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1),
+        panel.background = element_rect(fill = "white", colour = "white"),
+        axis.line = element_line(colour = "black"))
+```
+\
+There is a clear upward tendency for all bigger regions but most significant for East Asia and Pacific.
+\
+
+**How did emissions change in absolute values for single countries?**
+```{r, message=FALSE, warning=FALSE}
+# Development
+emission_dev = data.table("Country" = cotwo$Country,
+                          "Year" = cotwo$Year,
+                          "emission" = cotwo$total_emission)
+emission_dev = emission_dev[Year < 1993 | Year > 2017]
+emission_dev$Year = ifelse(emission_dev$Year < 2000, "Beginning", "Ending")
+emission_dev = emission_dev[,mean(emission), by = c("Country","Year")]
+colnames(emission_dev)[3] = "Mean"
+emission_dev2 = emission_dev[, diff(Mean), by = Country]
+colnames(emission_dev2)[2] = "Abs"
+emission_dev2 = merge(x = emission_dev2, y = emission_dev[, min(Mean), by = Country], by = "Country")
+colnames(emission_dev2)[3] = "Min"
+emission_dev2$Rel = emission_dev2$Abs / abs(emission_dev2$Min)
+
+options(scipen = 999)
+```
+
+```{r, message=FALSE, warning=FALSE}
+# Absolute
+abs_plot = emission_dev2[order(emission_dev2$Abs),]
+abs_plot = abs_plot[c(1:5, ((nrow(abs_plot)-4):nrow(abs_plot)))]
+abs_plot$label = as.factor(abs_plot$Abs > 0)
+
+ggplot(abs_plot, aes(x = reorder(Country, -Abs), y = Abs)) +
+  geom_bar(stat = "identity", aes(fill = label)) +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1),
+        panel.background = element_rect(fill = "white", colour = "white"),
+        axis.line = element_line(colour = "black"),
+        legend.position="none") +
+  labs(title = "Absolute change in emission for top and bottom countries",
+       x = "Countries",
+       y = "Change in kt") +
+  scale_fill_manual(values = c("TRUE" = "red", "FALSE" = "darkgreen"))
+```
+\
+From the beginning of the dataset until 2020, the biggest increase in emissions can be found in China, India and the USA. Brazil is the only country that could achieve a significant decrease.
+\
+
+**How did emissions change in relative values for single countries?**
+```{r, message=FALSE, warning=FALSE}
+# Relative
+rel_plot = emission_dev2[order(emission_dev2$Rel),]
+rel_plot = rel_plot[c(1:5, ((nrow(rel_plot)-4):nrow(rel_plot)))]
+rel_plot$label = as.factor(rel_plot$Rel > 0)
+
+ggplot(rel_plot, aes(x = reorder(Country, -Rel), y = Rel)) +
+  geom_bar(stat = "identity", aes(fill = label)) +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1),
+        panel.background = element_rect(fill = "white", colour = "white"),
+        axis.line = element_line(colour = "black"),
+        legend.position="none") +
+  labs(title = "Relative change in emission for top and bottom countries",
+       x = "Countries",
+       y = "Relative change in %") +
+  scale_fill_manual(values = c("TRUE" = "red", "FALSE" = "darkgreen"))
+```
+\
+Compared to the their starting point, Vietnam experienced the highest increase (by 10x). Several countries managed to cut emission compared to their starting point.
+\
+
+## Temperature development
+As the development of emissions has been examined before, accordingly will the temperature be examined closer in this paragraph.\
+
+**How did the temperature in different regions of the world develop compared to the world-wide average?**
+```{r, message=FALSE, warning=FALSE}
+# Which countries experience the biggest increase in temperature?
+
+temp_regions = cotwo[, mean(temp_change), by = c("Year","region")]
+temp_regions = temp_regions[complete.cases(temp_regions),]
+
+temp_regions = temp_regions %>%
+  mutate(region = as.factor(region)) %>%
+  spread(key = region, value = V1)
+
+temp_regions = data.table(merge(x = temp_regions, y = cotwo[,c("Year", "world_temp_change")], by = "Year", all.y = FALSE))
+temp_regions = temp_regions[!duplicated(Year),]
+
+temp_regions = temp_regions %>%
+  gather(key = "variable", value = "value", -Year)
+
+temp_regions = temp_regions[seq(0, nrow(temp_regions), 3),] # delete every second row
+colnames(temp_regions)[2] = "Region"
+
+ggplot(temp_regions, aes(x = Year, y = value)) +
+  geom_point(aes(color = Region)) +
+  geom_line(aes(color = Region, size = ifelse(Region == "world_temp_change", 0.5, 0.1))) +
+  scale_color_manual(values = c("South Asia" = "blue",
+                                "Europe & Central Asia" = "red",
+                                "Middle East & North Africa" = "green",
+                                "East Asia & Pacific" = "yellow",
+                                "Sub-Saharan Africa" = "purple",
+                                "Latin America & Caribbean" = "brown",
+                                "North America" = "orange",
+                                "world_temp_change" = "black")) +
+  labs(title = "Temperature development over time",
+       x = "Year",
+       y = "Tmperature increase [K]") +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1),
+        panel.background = element_rect(fill = "white", colour = "white"),
+        axis.line = element_line(colour = "black")) +
+  guides(size = "none")
+```
+\
+Europe, Middle East & Africa lay mostly above the world average while South Asia and Latin America & Caribean tend to be below.
+\
+
+```{r, message=FALSE, warning=FALSE}
+temp_regions2 = cotwo[, mean(temp_change), by = "region"]
+colnames(temp_regions2)[2] = "Average"
+temp_regions2 = temp_regions2[complete.cases(temp_regions2),]
+de = data.frame("World",mean(cotwo$world_temp_change))
+names(de) = c("region","Average")
+temp_regions2 = rbind(temp_regions2, de)
+temp_regions2$class = ifelse(temp_regions2$Average > as.numeric(temp_regions2[region == "World",2]), "above", "below")
+temp_regions2$class = ifelse(temp_regions2$Average == as.numeric(temp_regions2[region == "World",2]), "World", temp_regions2$class)
+
+ggplot(temp_regions2, aes(x = reorder(region, -Average), y = Average, fill = class)) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual(values = c("above" = "red",
+                                "World" = "grey",
+                                "below" = "blue")) +
+  labs(title = "Temperature increase in regions (1990-2020)",
+       x = "Region",
+       y = "Temperature increase [K]") +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1),
+        panel.background = element_rect(fill = "white", colour = "white"),
+        axis.line = element_line(colour = "black")) +
+  guides(fill = "none")
+```
+\
+The results from the previous graph can be confirmed in the average of the temperature increase over the last 20 years.
+
+
+## Worldwide overview
+
+**How much CO2 in agriculture are single countries emitting?**
+```{r, message=FALSE, warning=FALSE}
+# Worldmap
+world = map_data("world")
+
+world_data = cotwo[, sum(total_emission), by = Country]
+colnames(world_data)[length(world_data)] = "Emission"
+world_data = merge(x = world_data, y = cotwo[, mean(total_pop), by = Country])
+colnames(world_data)[length(world_data)] = "Mean_pop"
+
+world_data$Country = replace(world_data$Country, world_data$Country == "United States", "USA")
+world$region = replace(world$region, world$region == "Democratic Republic of the Congo", "Congo")
+world$region = replace(world$region, world$region == "Russia", "Russian Federation")
+
+world_data = merge(x = world_data, y = world, by.x = "Country", by.y = "region")
+world_data$Em_per_capita = world_data$Emission / world_data$Mean_pop
+# world_data = world_data[!duplicated(Country)]
+
+ggplot(data = world_data[Mean_pop > 1000000], mapping = aes(x = long, y = lat, group = group)) + 
+  coord_fixed(1.3) +
+  geom_polygon(aes(fill = Emission)) +
+  scale_fill_distiller(palette ="RdBu", direction = -1) + # or direction=1
+  ggtitle("Emissions by country") +
+  theme(
+  axis.text = element_blank(),
+  axis.line = element_blank(),
+  axis.ticks = element_blank(),
+  panel.border = element_blank(),
+  panel.grid = element_blank(),
+  axis.title = element_blank(),
+  panel.background = element_rect(fill = "white"),
+  plot.title = element_text(hjust = 0.5)
+)
+```
+\
+China appears to have the by far biggest part, closely followed by Brazil and the US.\
+\
+
+**How much CO2 in agriculture are single countries emitting per capita?**
+```{r, message=FALSE, warning=FALSE}
+ggplot(data = world_data[Mean_pop > 1000000], mapping = aes(x = long, y = lat, group = group)) + 
+  coord_fixed(1.3) +
+  geom_polygon(aes(fill = Em_per_capita)) +
+  scale_fill_distiller(palette ="RdBu", direction = -1) + # or direction=1
+  ggtitle("Emissions per capita by country") +
+  theme(
+  axis.text = element_blank(),
+  axis.line = element_blank(),
+  axis.ticks = element_blank(),
+  panel.border = element_blank(),
+  panel.grid = element_blank(),
+  axis.title = element_blank(),
+  panel.background = element_rect(fill = "white"),
+  plot.title = element_text(hjust = 0.5)
+)
+```
+\
+One can see very many blue/low emitting countries but this is due to the fact that single countries like Botsuana have a very high value what strechtes the scale. From the industrialized countries, Canada and Australia also have a relatively high value.\
+
+**How did temperatures change worldwide?**
+```{r, message=FALSE, warning=FALSE}
+# Temperature
+world_data = cotwo[, mean(temp_change), by = Country]
+colnames(world_data)[length(world_data)] = "Temp"
+
+world_data$Country = replace(world_data$Country, world_data$Country == "United States", "USA")
+world$region = replace(world$region, world$region == "Democratic Republic of the Congo", "Congo")
+world$region = replace(world$region, world$region == "Russia", "Russian Federation")
+
+world_data = merge(x = world_data, y = world, by.x = "Country", by.y = "region")
+# world_data = world_data[!duplicated(Country)]
+
+ggplot(data = world_data, mapping = aes(x = long, y = lat, group = group)) + 
+  coord_fixed(1.3) +
+  geom_polygon(aes(fill = Temp)) +
+  scale_fill_distiller(palette ="RdBu", direction = -1) + # or direction=1
+  ggtitle("Temperature increase by country") +
+  theme(
+  axis.text = element_blank(),
+  axis.line = element_blank(),
+  axis.ticks = element_blank(),
+  panel.border = element_blank(),
+  panel.grid = element_blank(),
+  axis.title = element_blank(),
+  panel.background = element_rect(fill = "white"),
+  plot.title = element_text(hjust = 0.5)
+)
+```
+\
+One can clearly observe that countries in the northern hemisphere suffer from a much greater temperature increase than the countries in the south.\
+
+## Forecasting
+
+**How does the future of emissions in agriculture and temperature development look like?**
+```{r, message=FALSE, warning=FALSE, class.source = "fold-show"}
+# Transform the data to a timeseries object
+forecasting_data = ts(data.table("Year" = unique(cotwo$Year),
+                                 "temp" = unique(cotwo$world_temp_change),
+                                 "emission" = cotwo[, sum(total_emission), by = Year]$V1))
+```
+
+\
+```{r, message=FALSE, warning=FALSE, class.source = "fold-show"}
+# Emission
+arima_em = auto.arima(forecasting_data[,3]) # fit the arima model
+fc_em = forecast(arima_em, h = 10) # forecast 10 steps
+```
+
+```{r, message=FALSE, warning=FALSE}
+plot_data = data.table("Year" = c(forecasting_data[,1], seq(2021,2030,1)),
+                       "old" = c(forecasting_data[,3], fc_em$mean),
+                       "Lower 80%" = c(rep(NA, nrow(forecasting_data)), fc_em$lower[1:10]),
+                       "Lower 95%" = c(rep(NA, nrow(forecasting_data)), fc_em$lower[11:20]),
+                       "Upper 80%" = c(rep(NA, nrow(forecasting_data)), fc_em$upper[1:10]),
+                       "Upper 95%" = c(rep(NA, nrow(forecasting_data)), fc_em$upper[11:20]))
+
+plot_data = plot_data %>% gather(key = "variable", value = "value", -Year)
+
+ggplot(plot_data, aes(x = Year, y = value)) +
+  geom_line(aes(color = variable)) +
+  scale_color_manual(values = c("black" = "grey",
+                                "Lower 80%" = "lightblue",
+                                "Upper 80%" = "lightblue",
+                                "Lower 95%" = "blue",
+                                "Upper 95%" = "blue")) +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1),
+        panel.background = element_rect(fill = "white", colour = "white"),
+        axis.line = element_line(colour = "black")) +
+  labs(title = "Emission forecast",
+       x = "Year",
+       y = "Emission forecast") +
+  guides(color = guide_legend(title = "Confidence level"))
+```
+\
+There is no seasonality and the ARIMA model captures the trend appropriately. The predicted trend is positive not perfectly linear and so are the intervals.
+
+```{r, message=FALSE, warning=FALSE, class.source = "fold-show"}
+arima_temp = auto.arima(forecasting_data[,2]) # fit the ARIMA model
+fc_temp = forecast(arima_temp, h = 10) # forecast 10 steps
+```
+
+```{r, message=FALSE, warning=FALSE}
+plot_data = data.table("Year" = c(forecasting_data[,1], seq(2021,2030,1)),
+                       "old" = c(forecasting_data[,2], fc_temp$mean),
+                       "Lower 80%" = c(rep(NA, nrow(forecasting_data)), fc_temp$lower[1:10]),
+                       "Lower 95%" = c(rep(NA, nrow(forecasting_data)), fc_temp$lower[11:20]),
+                       "Upper 80%" = c(rep(NA, nrow(forecasting_data)), fc_temp$upper[1:10]),
+                       "Upper 95%" = c(rep(NA, nrow(forecasting_data)), fc_temp$upper[11:20]))
+
+plot_data = plot_data %>% gather(key = "variable", value = "value", -Year)
+
+ggplot(plot_data, aes(x = Year, y = value)) +
+  geom_line(aes(color = variable)) +
+  scale_color_manual(values = c("black" = "grey",
+                                "Lower 80%" = "lightblue",
+                                "Upper 80%" = "lightblue",
+                                "Lower 95%" = "blue",
+                                "Upper 95%" = "blue")) +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1),
+        panel.background = element_rect(fill = "white", colour = "white"),
+        axis.line = element_line(colour = "black")) +
+  labs(title = "Temperature increase forecast",
+       x = "Year",
+       y = "temperature increase [K]") +
+  guides(color = guide_legend(title = "Confidence level"))
+```
+\
+The ARIMA model clearly captures the trend. As there is not seasonality, just a straight line including a positive trend can be observed as forecast. So are the prediction intervals.
+
+
+## References
+
+### Web sources
+https://www.kaggle.com/datasets/alessandrolobello/agri-food-co2-emission-dataset-forecasting-ml/data, 16.10.2024
+
+### Packages
+Barrett T, Dowle M, Srinivasan A, Gorecki J, Chirico M, Hocking T (2024). _data.table: Extension of `data.frame`_. R package version 1.15.2,
+<https://CRAN.R-project.org/package=data.table>.\
+\
+Tierney N, Cook D (2023). “Expanding Tidy Data Principles to Facilitate Missing Data Exploration, Visualization and Assessment of Imputations.” _Journal
+  of Statistical Software_, *105*(7), 1-31. doi:10.18637/jss.v105.i07 <https://doi.org/10.18637/jss.v105.i07>.\
+\
+Arel-Bundock V (2022). _WDI: World Development Indicators and Other World Bank Data_. R package version 2.7.8, <https://CRAN.R-project.org/package=WDI>.\
+\
+Wickham H, François R, Henry L, Müller K, Vaughan D (2023). _dplyr: A Grammar of Data Manipulation_. R package version 1.1.4,
+  <https://CRAN.R-project.org/package=dplyr>.\
+\
+H. Wickham. ggplot2: Elegant Graphics for Data Analysis. Springer-Verlag New York, 2016.\
+\
+Cameron A, van den Brand T (2024). _geomtextpath: Curved Text in 'ggplot2'_. R package version 0.1.4, <https://CRAN.R-project.org/package=geomtextpath>.\
+\
+Tuszynski J (2024). _caTools: Tools: Moving Window Statistics, GIF, Base64, ROC AUC, etc_. R package version 1.18.3,
+  <https://CRAN.R-project.org/package=caTools>.\
+\
+Ridgeway G, Developers G (2024). _gbm: Generalized Boosted Regression Models_. R package version 2.2.2, <https://CRAN.R-project.org/package=gbm>.\
+\
+Therneau T, Atkinson B (2023). _rpart: Recursive Partitioning and Regression Trees_. R package version 4.1.23,
+  <https://CRAN.R-project.org/package=rpart>.\
+\
+Peters A, Hothorn T (2024). _ipred: Improved Predictors_. R package version 0.9-15, <https://CRAN.R-project.org/package=ipred>.\
+\
+R Core Team (2024). _R: A Language and Environment for Statistical Computing_. R Foundation for Statistical Computing, Vienna, Austria.
+  <https://www.R-project.org/>.\
+\
+Kuhn, M. (2008). Building Predictive Models in R Using the caret Package. Journal of Statistical Software, 28(5), 1–26.
+  https://doi.org/10.18637/jss.v028.i05\
+\
+Hyndman R, Athanasopoulos G, Bergmeir C, Caceres G, Chhay L, O'Hara-Wild M, Petropoulos F, Razbash S, Wang E, Yasmeen F (2024). _forecast: Forecasting
+  functions for time series and linear models_. R package version 8.23.0, <https://pkg.robjhyndman.com/forecast/>.\
+\
+Hyndman RJ, Khandakar Y (2008). “Automatic time series forecasting: the forecast package for R.” _Journal of Statistical Software_, *27*(3), 1-22.
+doi:10.18637/jss.v027.i03 <https://doi.org/10.18637/jss.v027.i03>.\
+\
+Ulrike Groemping (2006). Relative Importance for Linear Regression in R: The Package relaimpo. Journal of Statistical Software, 17(1), 1--27.\
+\
+Wickham H, Vaughan D, Girlich M (2024). _tidyr: Tidy Messy Data_. R package version 1.3.1, <https://CRAN.R-project.org/package=tidyr>.\
+\
+Wilkins D (2023). _treemapify: Draw Treemaps in 'ggplot2'_. R package version 2.5.6, <https://CRAN.R-project.org/package=treemapify>.\
+\
+Taiyun Wei and Viliam Simko (2024). R package 'corrplot': Visualization of a Correlation Matrix (Version 0.95). Available from
+  https://github.com/taiyun/corrplot\
+\
+O'Hara-Wild M, Hyndman R, Wang E (2024). _fabletools: Core Tools for Packages in the 'fable' Framework_. R package version 0.4.2,
+  <https://CRAN.R-project.org/package=fabletools>.
+
+
